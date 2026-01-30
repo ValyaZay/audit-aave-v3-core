@@ -129,6 +129,7 @@ contract StableDebtToken is DebtTokenBase, IncentivizedERC20, IStableDebtToken {
   ) external virtual override onlyPool returns (bool, uint256, uint256) {
     MintLocalVars memory vars;
 
+    //@V:E enforces user should be eligible to borrow
     if (user != onBehalfOf) {
       _decreaseBorrowAllowance(onBehalfOf, user, amount);
     }
@@ -157,6 +158,7 @@ contract StableDebtToken is DebtTokenBase, IncentivizedERC20, IStableDebtToken {
     ).toUint128();
 
     uint256 amountToMint = amount + balanceIncrease;
+    //@V:E after _mint the stored super.balanceOf(user) will contain: old principal + accrued interest by the time the current borrow happened + new borrow
     _mint(onBehalfOf, amountToMint, vars.previousSupply);
 
     emit Transfer(address(0), onBehalfOf, amountToMint);
@@ -254,12 +256,14 @@ contract StableDebtToken is DebtTokenBase, IncentivizedERC20, IStableDebtToken {
   function _calculateBalanceIncrease(
     address user
   ) internal view returns (uint256, uint256, uint256) {
+    //@V:E only principal
     uint256 previousPrincipalBalance = super.balanceOf(user);
 
     if (previousPrincipalBalance == 0) {
       return (0, 0, 0);
     }
 
+    //@V:E principal + interest
     uint256 newPrincipalBalance = balanceOf(user);
 
     return (

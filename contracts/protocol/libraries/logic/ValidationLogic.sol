@@ -154,11 +154,13 @@ library ValidationLogic {
       vars.isPaused
     ) = params.reserveCache.reserveConfiguration.getFlags();
 
+    //@V:E pre-state invariants enforcement - reserve is active, not paused or frozen; borrow enabled
     require(vars.isActive, Errors.RESERVE_INACTIVE);
     require(!vars.isPaused, Errors.RESERVE_PAUSED);
     require(!vars.isFrozen, Errors.RESERVE_FROZEN);
     require(vars.borrowingEnabled, Errors.BORROWING_NOT_ENABLED);
 
+    //@V:E enforces invariant that borrow is allowed
     require(
       params.priceOracleSentinel == address(0) ||
         IPriceOracleSentinel(params.priceOracleSentinel).isBorrowAllowed(),
@@ -166,6 +168,7 @@ library ValidationLogic {
     );
 
     //validate interest rate mode
+    //@V:E this enforces invariant - debt accrues interest
     require(
       params.interestRateMode == DataTypes.InterestRateMode.VARIABLE ||
         params.interestRateMode == DataTypes.InterestRateMode.STABLE,
@@ -188,11 +191,13 @@ library ValidationLogic {
         vars.totalSupplyVariableDebt +
         params.amount;
 
+      //@V:E this enforces invariant that protocol will not mint debt if it is at risk to be insolvent
       unchecked {
         require(vars.totalDebt <= vars.borrowCap * vars.assetUnit, Errors.BORROW_CAP_EXCEEDED);
       }
     }
 
+    //@V:E this enforces invariant that an asset should be borrowable
     if (params.isolationModeActive) {
       // check that the asset being borrowed is borrowable in isolation mode AND
       // the total exposure is no bigger than the collateral debt ceiling
@@ -201,6 +206,7 @@ library ValidationLogic {
         Errors.ASSET_NOT_BORROWABLE_IN_ISOLATION
       );
 
+      //@V:E this enforces invariant that protocol will not mint debt if it is at risk to be insolvent
       require(
         reservesData[params.isolationModeCollateralAddress].isolationModeTotalDebt +
           (params.amount /
@@ -211,6 +217,7 @@ library ValidationLogic {
       );
     }
 
+    //@V:E this enforces a pre-state invariant that eMode is valid
     if (params.userEModeCategory != 0) {
       require(
         params.reserveCache.reserveConfiguration.getEModeCategory() == params.userEModeCategory,
@@ -239,9 +246,12 @@ library ValidationLogic {
       })
     );
 
+    //@V:E this assumes that user has some collateral - 1 wei?
     require(vars.userCollateralInBaseCurrency != 0, Errors.COLLATERAL_BALANCE_IS_ZERO);
+    
     require(vars.currentLtv != 0, Errors.LTV_VALIDATION_FAILED);
 
+    //@V:E this enforces invariant that HF > LIQUIDATION_THRESHOLD - CORRECT!!
     require(
       vars.healthFactor > HEALTH_FACTOR_LIQUIDATION_THRESHOLD,
       Errors.HEALTH_FACTOR_LOWER_THAN_LIQUIDATION_THRESHOLD
@@ -260,6 +270,7 @@ library ValidationLogic {
     vars.collateralNeededInBaseCurrency = (vars.userDebtInBaseCurrency + vars.amountInBaseCurrency)
       .percentDiv(vars.currentLtv); //LTV is calculated in percentage
 
+    //@V:E enforces invariant that debt should not be undercollateralized - CORRECT!
     require(
       vars.collateralNeededInBaseCurrency <= vars.userCollateralInBaseCurrency,
       Errors.COLLATERAL_CANNOT_COVER_NEW_BORROW
@@ -291,6 +302,7 @@ library ValidationLogic {
       //available liquidity
       uint256 maxLoanSizeStable = vars.availableLiquidity.percentMul(params.maxStableLoanPercent);
 
+      //@V:E enforces invariant that protocol should not be left insolvent after borrow
       require(params.amount <= maxLoanSizeStable, Errors.AMOUNT_BIGGER_THAN_MAX_LOAN_SIZE_STABLE);
     }
 

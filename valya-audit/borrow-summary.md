@@ -1,12 +1,39 @@
+---
+title: MyCut Security Review
+author: Valya Zaitseva
+date: January 16, 2026
+header-includes:
+  - \usepackage{titling}
+  - \usepackage{graphicx}
+---
+
+\begin{center}
+    \centering
+    \begin{figure}[h]
+        \centering
+        \includegraphics[width=0.1\textwidth]{logo.pdf} 
+    \end{figure}
+    \vspace*{2cm}
+    {\Huge\bfseries MyCut Security Review\par}
+    \vspace{1cm}
+    {\Large\itshape Valya Zaitseva\par}
+    
+    {\large \today\par}
+\end{center}
+
+\maketitle
+
+<!-- Your report starts here! -->
+
 # FEATURE AUDIT - AAVE-V3 `BORROW()`
 
 # Feature scope
 1. The feature under the audit: `borrow()`.
 2. Economic purpose:   it allows to borrow assets from a protocol for users themself or on behalf of users provided that they were explicitly delegated. The protocol allows to borrow as long as it stays solvent.
 3. State modified: 
-    * protocol liquidity, 
-    * total debt amount, 
-    * user debt balances and borrowing configuration
+* protocol liquidity, 
+* total debt amount, 
+* user debt balances and borrowing configuration
 
 # Invariants (grouped)
 ## Pre-state (before borrow)
@@ -40,48 +67,19 @@ If this feature fails, how does the protocol lose money?
 `repay()` should reverse all borrow-induced state changes: decrease debt tokens and restore liquidity.
 `repay()` feature is not yet audited, but the invariant should be verified in a future audit cycle.
 
-# Call map with enforcement/assumption map - Execution Flow
-```
-                    borrow()
-                        -> executeBorrow()                              <- * ENFORCED: ORDERING validate before debt mint before transferUnderlyingTo
-                            -> reserve.updateState()
-                            -> userConfig.getIsolationModeState()
-ACCOUNTING BOUNDARIES:      -> ValidationLogic.validateBorrow()         <- * ENFORCED: reserve should not be paused or frozen
-                                                                            * ENFORCED: borrow should be allowed for reserve
-                                                                            * ENFORCED: borrow should be allowed for an asset                                            
-                                                                            * ENFORCED: protocol should be solvent if it borrows some amount
-                                                                            * ENFORCED: eMode is valid
-                                                                            * ENFORCED: HF >= liquidation threshold 
-                                                                            * ENFORCED: user should have a borrowing power > borrow amount
-                                                                            * ENFORECED: oracle should be set and price should not be zero
-                                                                            * ASSUMED: user should be eligible to borrow - DELEGATION IS CHECKED IN DEBT TOKEN MINT
-                                -> GenericLogic.calculateUserAccountData <- * ENFORCED: oracle should be set and price should not be zero
-IRREVERSIBLE/EXTERNAL:      -> IStableDebtToken.mint()                   <- * ENFORCED: user should be eligible to borrow
-                                                                            * ENFORCED: borrowed amount == debt minted
-                                                                            * ENFORCED: debt increased == debt minted
-IRREVERSIBLE/EXTERNAL:      -> IVariableDebtToken.mint()                 <- * ENFORCED: user should be eligible to borrow
-                                                                            * ENFORCED: borrowed amount == debt minted
-                                                                            * ENFORCED: debt increased == debt minted
-                            -> userConfig.setBorrowing()
-                            -> reserve.updateInterestRates()
-                                -> IReserveInterestRateStrategy.calculateInterestRates <- * ENFORCED: liquidity decrease == debt minted
-EXTERNAL:                   -> transferUnderlyingTo()                    <- * ENFORCED: transfered amount == debt minted
-```
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=1\textwidth]{aave-v3-borrow.jpg}
+    \caption{Call map with enforcement/assumption map - Execution Flow (Aave v3)}
+    \label{fig:borrow-sequence-flow}
+\end{figure}
 
-# Sequence Flow
-```
-borrow()
- -> executeBorrow()
-    -> reserve.updateState() -> accrues interest, updates indeces (storage write)
-    -> userConfig.getIsolationModeState() -> reads isolation mode state
-    -> ValidationLogic.validateBorrow() -> pre-state invariants enforced
-    -> GenericLogic.calculateUserAccountData -> computes HF, collateral, debt in base currency
-    -> IStableDebtToken.mint() -> stable debt path, accrues past interest and mints new principal
-    -> IVariableDebtToken.mint() -> variable debt path, mints scaled principal using index
-    -> userConfig.setBorrowing() -> updates user config if first borrow
-    -> reserve.updateInterestRates() -> updates protocol rates and utilizaiton
-    -> IAToken.transferUnderlyingTo() -> transfers real underlying assets to borrower
-```
+\begin{figure}[h]
+    \centering
+    \includegraphics[width=1\textwidth]{sequence-flow-borrow.jpg}
+    \caption{Borrow sequence flow (Aave v3)}
+    \label{fig:borrow-sequence-flow}
+\end{figure}
 
 # Risk Hotspots - Threat Modeling
 1. Oracle dependency - price must be fresh; stale prices can allow over-borrowing if sentinel not set.
@@ -112,10 +110,10 @@ borrow()
    3. Can reentrancy reoder logic? - No
 
 # Stable vs Variable Debt Notes
-| Debt Type         | Mint Behavior                                    | Interest Accounting                                                                |
-| ----------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| StableDebtToken   | mints principal + accrued interest               | interest realized on mint, user balance grows immediately                          |
-| VariableDebtToken | mints scaled principal using curent borrow index | interest implicit via index, events show 'real' debt, storage tracks scaled amount |
+| Debt Type           | Mint Behavior                                    | Interest Accounting                                                                |
+| ------------------- | ------------------------------------------------ | ---------------------------------------------------------------------------------- |
+| Stable Debt Token   | mints principal + accrued interest               | interest realized on mint, user balance grows immediately                          |
+| Variable Debt Token | mints scaled principal using curent borrow index | interest implicit via index, events show 'real' debt, storage tracks scaled amount |
 
 
 # Final verdict

@@ -71,18 +71,48 @@ library BorrowLogic {
     DataTypes.UserConfigurationMap storage userConfig,
     DataTypes.ExecuteBorrowParams memory params
   ) public {
+    /**
+     * @V:E
+     * Timeline of writes
+     *  1. reserve.cache()              → read storage
+        2. reserve.updateState()        → WRITE indexes + timestamp
+        3. validateBorrow()             → view-only
+        4. debtToken.mint()             → WRITE debt balances
+        5. reserve.updateInterestRates()→ WRITE rates
+        6. aToken.transferUnderlying() → WRITE liquidity
+     */
     DataTypes.ReserveData storage reserve = reservesData[params.asset];
     DataTypes.ReserveCache memory reserveCache = reserve.cache();
 
-    reserve.updateState(reserveCache);
+    /**
+     * @STATE
+     * @V:E interest accrual (global state mutation) - this is a PART OF VALIDATION
+     * this changes debt indices -> RESERVE CACHE IS UPDATED BECAUSE IN MEMORY!!!,
+     * must happen before validation!!!
+     * protects invariant - "Interest accrual must be applied before new debt is added"
+     * HIGH if this is after validation
+     */
+    reserve.updateState(reserveCache); 
 
+    /**
+     * @V:E risk context derivation - computes *constraints* used by validation!!
+     * not a state change
+     * reads multiple reserves
+     */
     (
       bool isolationModeActive,
       address isolationModeCollateralAddress,
       uint256 isolationModeDebtCeiling
     ) = userConfig.getIsolationModeState(reservesData, reservesList);
 
-    ValidationLogic.validateBorrow(
+    /**
+     * @VAL
+     * @V:E full borrow eligibility validation (HF, LTV, caps, oracle)
+     * this is the single most important block
+     * almost all high-severity invariants must be enforced here
+     * !! IMPORTANT - IS EVERY CRITICAL INVARIANT ENFORCED HERE, OR ARE SOME ASSUMED?
+     */
+    ValidationLogic.validateBorrow( 
       reservesData,
       reservesList,
       eModeCategories,
@@ -107,6 +137,23 @@ library BorrowLogic {
     uint256 currentStableRate = 0;
     bool isFirstBorrowing = false;
 
+    /** ////////////////////////////////////////////////////////// PIVOT POINT IN THE FUNCTION ////////////////////////////////////
+     * @V:E irreversible user debt creation (external call)
+     * important because: external call
+     *                    irreversible
+     *                    happens after validation
+     *                    happens before underlying transfer
+     * AUDITORS INSIGHT:
+     * if anything is wrong before this point -> revert saves me
+     * if anything is wrong after this -> system must already be safe
+     * 
+     * 
+     * DEBT IS MINTED BEFORE `transferUnderlyingTo()` 
+     * Debt token mint = record obligation
+     * this ordering enforces this invariant: protocol never gives funcs before debt exists
+     * @V:E ordering: debt minted before liquidity release (GOOD)
+     * @ORDER
+     */
     if (params.interestRateMode == DataTypes.InterestRateMode.STABLE) {
       currentStableRate = reserve.currentStableBorrowRate;
 
@@ -126,10 +173,26 @@ library BorrowLogic {
       ).mint(params.user, params.onBehalfOf, params.amount, reserveCache.nextVariableBorrowIndex);
     }
 
+    /**
+     * @STATE
+     * @V:E user borrowing flag update (state mutation)
+     * this is not permission enforcement
+     * it's accounting / state reflection
+     * it's triggered only on first borrow
+     * !!! this matters when auditing liquidations and repay
+     */
     if (isFirstBorrowing) {
       userConfig.setBorrowing(reserve.id, true);
     }
 
+    /**
+     * @V:E isolation mode debt accounting (presicion-sensitive)
+     * division + decimals
+     * rounding
+     * ceiling enforcement relies on this
+     * This is a medium-severity bug hotspot historically
+     * 
+     */
     if (isolationModeActive) {
       uint256 nextIsolationModeTotalDebt = reservesData[isolationModeCollateralAddress]
         .isolationModeTotalDebt += (params.amount /
@@ -142,6 +205,10 @@ library BorrowLogic {
       );
     }
 
+    /*
+       @V:E reserve rate recalculation after borrow
+       must reflect the borrow correctly
+    */
     reserve.updateInterestRates(
       reserveCache,
       params.asset,
@@ -149,6 +216,15 @@ library BorrowLogic {
       params.releaseUnderlying ? params.amount : 0
     );
 
+    /*
+      @EXT
+      @V:E external call (liquidity release, reentrancy surface)
+      ASK: is all validation done?
+           is all critical state updated?
+           could reentrancy observe broken invarianty? -> investigate
+
+      the flag `releaseUnderlying` is checked because sometimes debt is minted, but underlying in not transferred
+    */
     if (params.releaseUnderlying) {
       IAToken(reserveCache.aTokenAddress).transferUnderlyingTo(params.user, params.amount);
     }

@@ -1,9 +1,7 @@
 ---
-title: MyCut Security Review
 author: Valya Zaitseva
-date: January 16, 2026
+
 header-includes:
-  - \usepackage{titling}
   - \usepackage{graphicx}
 ---
 
@@ -13,30 +11,23 @@ header-includes:
         \centering
         \includegraphics[width=0.1\textwidth]{logo.pdf} 
     \end{figure}
-    \vspace*{2cm}
-    {\Huge\bfseries MyCut Security Review\par}
-    \vspace{1cm}
-    {\Large\itshape Valya Zaitseva\par}
-    
+    {\Huge\bfseries FEATURE AUDIT - AAVE-V3 `BORROW()`\par}
+    {\Large\ Valya Zaitseva\par}    
     {\large \today\par}
 \end{center}
 
-\maketitle
 
-<!-- Your report starts here! -->
-
-# FEATURE AUDIT - AAVE-V3 `BORROW()`
 
 # Feature scope
 1. The feature under the audit: `borrow()`.
 2. Economic purpose:   it allows to borrow assets from a protocol for users themself or on behalf of users provided that they were explicitly delegated. The protocol allows to borrow as long as it stays solvent.
 3. State modified: 
-* protocol liquidity, 
-* total debt amount, 
-* user debt balances and borrowing configuration
+   * protocol liquidity, 
+   * total debt amount, 
+   * user debt balances and borrowing configuration
 
 # Invariants (grouped)
-## Pre-state (before borrow)
+## 1. Pre-state (before borrow)
 * PROTOCOL-LEVEL SAFETY: reserve should not be paused or frozen +
 * PROTOCOL-LEVEL SAFETY: borrow should be allowed for reserve  +
 * PROTOCOL-LEVEL SAFETY: borrow should be allowed for an asset  +
@@ -45,41 +36,34 @@ header-includes:
 * ECONOMIC SAFETY: protocol should be solvent if it borrows some amount +
 * PROTOCOL-LEVEL SAFETY: eMode category must be consistent with user selection +
 
-## Mid-process (during borrow)
+## 2. Mid-process (during borrow)
 * ORDERING: validate before debt mint before transferUnderlyingTo +
 * AUTHORIZATION: user should be eligible to borrow +
 
-## Post-state (after borrow)
+## 3. Post-state (after borrow)
 * PROTOCOL SOLVENCY: borrowed amount per debt token type == debt minted +
 * PROTOCOL SOLVENCY: debt increased == debt minted +
 * PROTOCOL SOLVENCY: liquidity decrease == debt minted +
 * ACCOUNTING: transferred amount == debt minted +
 * ACCOUNTING: Health factor >= liquidation threshold +
 
-# Failure Surface:
+# Failure Surface
 If this feature fails, how does the protocol lose money?
-* bad debt / insolvency
-* unauthorized debt creation
-* health factor below safe threshold, enabling liquidations
-* oracle-based over-borrowing
+
+  - bad debt / insolvency,
+  - unauthorized debt creation,
+  - health factor below safe threshold, enabling liquidations,
+  - oracle-based over-borrowing.
 
 # Cross-Feature Invariant Consistency
 `repay()` should reverse all borrow-induced state changes: decrease debt tokens and restore liquidity.
 `repay()` feature is not yet audited, but the invariant should be verified in a future audit cycle.
 
-\begin{figure}[h]
-    \centering
-    \includegraphics[width=1\textwidth]{aave-v3-borrow.jpg}
-    \caption{Call map with enforcement/assumption map - Execution Flow (Aave v3)}
-    \label{fig:borrow-sequence-flow}
-\end{figure}
-
-\begin{figure}[h]
-    \centering
-    \includegraphics[width=1\textwidth]{sequence-flow-borrow.jpg}
-    \caption{Borrow sequence flow (Aave v3)}
-    \label{fig:borrow-sequence-flow}
-\end{figure}
+# Call map with enforcement/assumption map - Execution Flow
+\includegraphics[width=1\textwidth]{aave-v3-borrow.jpg}
+      
+# Sequence Flow
+\includegraphics[width=1\textwidth]{sequence-flow-borrow.jpg}
 
 # Risk Hotspots - Threat Modeling
 1. Oracle dependency - price must be fresh; stale prices can allow over-borrowing if sentinel not set.

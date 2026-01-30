@@ -42,12 +42,21 @@ If this feature fails, how does the protocol lose money?
 * Oracle-based under-repay -> DEPENDENCY SAFETY BROKEN,
 * Persistent dust debt -> DUST SAFETY INVARIANT BROKEN.
 
-# Table of Invariants + Failure Surface
+# Table of Invariants + Failure Surface + Threat Model
+| State | Type | Invariant in plain English | Failure surface (what can go wrong, map of vulnerabilities derived from invariants) | 5-lens question | Threat Model / Attack | Enforced |  Severity/Impact |Test | Tested |
+
 <!--> Comprose a table in google drive. Paste an image of a table here <!-->
 
 # Cross-Feature Invariant Consistency
 `repay()` should reverse all borrow-induced state changes: decrease debt tokens and restore liquidity, should reverse principal effects, not necessarily index history.
 
+# Code Security Research
+## Call Map - Structural Scan
+Accounting Boundaries/Irreversible/External func -> what happens
+
+## Call Map - Enforcement / Assumption Map
+func -> enforced: invariant
+        assumed: invariant
 
 
 

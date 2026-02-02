@@ -150,7 +150,7 @@ library BorrowLogic {
      * 
      * DEBT IS MINTED BEFORE `transferUnderlyingTo()` 
      * Debt token mint = record obligation
-     * this ordering enforces this invariant: protocol never gives funcs before debt exists
+     * this ordering enforces this invariant: protocol never gives funds before debt exists
      * @V:E ordering: debt minted before liquidity release (GOOD)
      * @ORDER
      */
@@ -261,13 +261,19 @@ library BorrowLogic {
   ) external returns (uint256) {
     DataTypes.ReserveData storage reserve = reservesData[params.asset];
     DataTypes.ReserveCache memory reserveCache = reserve.cache();
+
+    //@V:E updates indices, write to storage
     reserve.updateState(reserveCache);
 
+    //@V:E view - get debts
     (uint256 stableDebt, uint256 variableDebt) = Helpers.getUserCurrentDebt(
       params.onBehalfOf,
       reserveCache
     );
 
+    /* @V:E ACCOUNTING BOUNDARIES?
+        here most of invariants should be enforced
+    */
     ValidationLogic.validateRepay(
       reserveCache,
       params.amount,
@@ -286,10 +292,14 @@ library BorrowLogic {
       params.amount = IAToken(reserveCache.aTokenAddress).balanceOf(msg.sender);
     }
 
+    // @V:E reconsider 'paybackAmount'
     if (params.amount < paybackAmount) {
       paybackAmount = params.amount;
     }
 
+    /* @V:E IRREVERSIBLE - pivot point in repay
+        here debt tokens are burned - why before transfer?
+    */
     if (params.interestRateMode == DataTypes.InterestRateMode.STABLE) {
       (reserveCache.nextTotalStableDebt, reserveCache.nextAvgStableBorrowRate) = IStableDebtToken(
         reserveCache.stableDebtTokenAddress
@@ -300,6 +310,7 @@ library BorrowLogic {
       ).burn(params.onBehalfOf, paybackAmount, reserveCache.nextVariableBorrowIndex);
     }
 
+    //@V:E update interest rates
     reserve.updateInterestRates(
       reserveCache,
       params.asset,
@@ -307,10 +318,12 @@ library BorrowLogic {
       0
     );
 
+    // @V:E if user repayed everything, the borrowing flag is zeroed
     if (stableDebt + variableDebt - paybackAmount == 0) {
       userConfig.setBorrowing(reserve.id, false);
     }
 
+    // @V:E calculating debt if isolated mode - what is isolated mode?
     IsolationModeLogic.updateIsolatedDebtIfIsolated(
       reservesData,
       reservesList,
@@ -319,6 +332,9 @@ library BorrowLogic {
       paybackAmount
     );
 
+    /*@V:E burn ATokens if 'useATokens' is true 
+      why burn debt tokens above and A tokens here? what are A tokens?
+    */
     if (params.useATokens) {
       IAToken(reserveCache.aTokenAddress).burn(
         msg.sender,
@@ -327,7 +343,10 @@ library BorrowLogic {
         reserveCache.nextLiquidityIndex
       );
     } else {
+      //@V:E transfer in first
       IERC20(params.asset).safeTransferFrom(msg.sender, reserveCache.aTokenAddress, paybackAmount);
+
+      //@V:E handleRepayment - what is there? burn of debt tokens already done
       IAToken(reserveCache.aTokenAddress).handleRepayment(
         msg.sender,
         params.onBehalfOf,

@@ -259,13 +259,49 @@ library BorrowLogic {
     DataTypes.UserConfigurationMap storage userConfig,
     DataTypes.ExecuteRepayParams memory params
   ) external returns (uint256) {
+    /* @V:E repay means:
+            1. Reduce what you owe -> burn debt tokens
+            2. Pay value -> either:
+                * burn your aTokens or
+                * transfer underlying into the pool
+                * both must happen
+     */
     DataTypes.ReserveData storage reserve = reservesData[params.asset];
+
+    /*@V:E in-memory reserve cache
+      snapshots addresses, indices and rates
+      nextLiquidityIndex == currentLiquidityIndex
+      nextVariableBorrowIndex == currentVariableBorrowIndex
+    */
     DataTypes.ReserveCache memory reserveCache = reserve.cache();
 
-    //@V:E updates indices, write to storage
+    /*@V:E updates indices (liquidityIndex == nextliquidityIndex and variableBorrowIndex == nextVariableBorrowIndex) and timestamp, write to storage
+      mints accrued debt to treasury
+      cache now is logically stale unless updated fields are tracked via reserveCach.next*
+    */
     reserve.updateState(reserveCache);
 
-    //@V:E view - get debts
+    /*@V:E view - get 'onBehalfOf' debts in a reserve - values here are all up-to-date, no futher index application needed for repay math
+      -> oldIndex * interestSinceLastUpdated == getNormalizedVariableDebt() (@V:E aave here calls index as 'debt', i.e. getNormalizedVariableDebt should be getNormalizedVariableIndex)
+      ---> oldIndex == reserve.variableBorrowIndex
+      ---> interestSinceLastUpdated  == calculateCompoundInterest(rate, deltaTime)
+      -> variableDebtToken.super.balanceOf(user) == scaledDebt
+      variableDebt = variableDebtToken.super.balanceOf(user) * (oldIndex * interestSinceLastUpdated)
+
+      -> stableDebt calculation does not use stored 'oldIndex', it's index is always re-calculated based on per-user rate when current stableDebt is needed. This is possible because principal is stored for stableDebt is raw, not scaled (see below that it is scaled rarely)
+      -> index = calculateCompoundedInterest(userRate, deltaTime)
+      stableDebt = stableDebtToken.super.balanceOf(user) * index(per-user rate, deltaTime)
+
+      To sum up: stableDebt calculation does not use stored 'oldIndex', it's index (=growth factor) is always re-calculated when current stableDebt is needed (i.e. recomputed on demand from (userRate and now-lastUpdated)). This is possible because principal is stored for stableDebt as raw, not scaled by any index. There is no need to store scaled principal for stableDebt because the rate is individual for a user. But!! Stable rate may be rebalanced, i.e. changed. In this case stable principal will change, it will contain accrued interest now for the old per-user rate and new per-user rate will be applied to the new principal for future time. This rebalancing happens rare, comparing to variable rate.
+      
+      But to culculate variableDebt we use stored scaled principal, which includes applied indices before the current time. It is necessary because variable index CHANGES OVER TIME frequently and should be applied on demand or once it is changed because there is no storage for variable rate in particular time range. 
+
+      Both models of stable debt and variable debt are the same at the moment of global rate or per-user rate change. In this moment 'scaledBalance' (==scaledDebt) for variableDebt contains interest prior rate change. Same is for stableDebt -> the user principal updates to include the previous interest calculated for the old per-user rate. Scaled balance stays constant between updates, just like principal for stable debt.
+
+      Key takeaways: Operational difference:
+        Variable → global rate applied via global index
+        Stable → per-user rate applied on demand
+    */
     (uint256 stableDebt, uint256 variableDebt) = Helpers.getUserCurrentDebt(
       params.onBehalfOf,
       reserveCache
@@ -288,6 +324,11 @@ library BorrowLogic {
       : variableDebt;
 
     // Allows a user to repay with aTokens without leaving dust from interest.
+    /* @V:E what are ATokens and why they can be used for repay?
+      answer: aTokens are given when assets are deposited, i.e. aTokens are interest-bearing deposit receipts; 1 aToken represents: underlying = aTokenBalance * liquidityIndex.
+              i.e. aTokens are the claim on liquidity
+              when repay a debt - aTokens may be used, which means "aToken burn = I give back my claim on liquidity" 
+    */
     if (params.useATokens && params.amount == type(uint256).max) {
       params.amount = IAToken(reserveCache.aTokenAddress).balanceOf(msg.sender);
     }
@@ -299,6 +340,9 @@ library BorrowLogic {
 
     /* @V:E IRREVERSIBLE - pivot point in repay
         here debt tokens are burned - why before transfer?
+        answer: 1. reentrancy guard - if 'safeTransferFrom' reenters -> no debt remains;
+                2. interest rates depend on TOTAL DEBT, must burn debt before 'updateInterestRates'
+                3. state first - tokens second
     */
     if (params.interestRateMode == DataTypes.InterestRateMode.STABLE) {
       (reserveCache.nextTotalStableDebt, reserveCache.nextAvgStableBorrowRate) = IStableDebtToken(
@@ -314,16 +358,23 @@ library BorrowLogic {
     reserve.updateInterestRates(
       reserveCache,
       params.asset,
+      //@V:E if useATokens == true, then 'liquidityAdded == 0', because liquidity is already in protocol 
       params.useATokens ? 0 : paybackAmount,
       0
     );
 
-    // @V:E if user repayed everything, the borrowing flag is zeroed
+    /* @V:E if user repayed everything, the borrowing flag is zeroed
+        This flag is used by health factor and liquidation logic
+    */
     if (stableDebt + variableDebt - paybackAmount == 0) {
       userConfig.setBorrowing(reserve.id, false);
     }
 
-    // @V:E calculating debt if isolated mode - what is isolated mode?
+    /* @V:E calculating debt if an isolated mode - what is the isolated mode?
+        answer: certain assets are isolated collateral (sandboxed collateral)
+                you can borrow only up to a global debt cap
+                prevents systemic risk from exotic assets
+    */
     IsolationModeLogic.updateIsolatedDebtIfIsolated(
       reservesData,
       reservesList,
@@ -334,6 +385,12 @@ library BorrowLogic {
 
     /*@V:E burn ATokens if 'useATokens' is true 
       why burn debt tokens above and A tokens here? what are A tokens?
+      answer: aTokens represent the user's claim on liquidity (because he received A tokens when deposited smth)
+              They may be burned, not transferred, and debt will reduce, liquidity stays in protocol, but the user doesn't have any rights on it
+              debtTokens are burned as usual, reducing user's debt
+
+              debtToken represents 'what user owes'
+              aToken represents 'what user owns'
     */
     if (params.useATokens) {
       IAToken(reserveCache.aTokenAddress).burn(
@@ -343,10 +400,10 @@ library BorrowLogic {
         reserveCache.nextLiquidityIndex
       );
     } else {
-      //@V:E transfer in first
+      //@V:E transfer assets in if ATokens are not used
       IERC20(params.asset).safeTransferFrom(msg.sender, reserveCache.aTokenAddress, paybackAmount);
 
-      //@V:E handleRepayment - what is there? burn of debt tokens already done
+      //@V:E handleRepayment - does nothing
       IAToken(reserveCache.aTokenAddress).handleRepayment(
         msg.sender,
         params.onBehalfOf,

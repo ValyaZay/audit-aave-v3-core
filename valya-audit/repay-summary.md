@@ -1,4 +1,16 @@
-# FEATURE AUDIT - AAVE-V3 `REPAY()`
+\usepackage{graphicx}
+\usepackage{pdfpages}
+\usepackage{pdflscape}
+\begin{center}
+    \centering
+    \begin{figure}[h]
+        \centering
+        \includegraphics[width=0.1\textwidth]{logo.pdf} 
+    \end{figure}
+    {\Huge\bfseries FEATURE AUDIT - AAVE-V3 `REPAY()`\par}
+    {\Large\ Valya Zaitseva\par}    
+    {\large \today\par}
+\end{center}
 
 # Feature scope
 1. The feature under the audit: `repay()`.
@@ -8,7 +20,7 @@
     * total debt amount, 
     * user debt balances and borrowing configuration
 
-# Invariants (grouped)
+# Grouped Invariants with Failure Surface and Threat Model
 ## 1. Pre-state (before repay)
 * STATE VALIDITY: user debt >= 0.
 * STATE VALIDITY: if user debt == 0, repay must revert.
@@ -19,6 +31,7 @@
 * ATOMICITY: debt burn and liquidity increase must be atomic - no observable state where one happens without the other.
 * AUTHORIZATION: only debtor or approved delegate can repay on behalf.
 * NON-RESTRICTIVENESS: any third party may repay their own funds for a debtor if explicitly allowed by protocol design
+* ORDERING: Transfer asset before burn
 
 ## 3. Post-state (after repay)
 * PROTOCOL SOLVENCY: transferred repay amount to protocol (effective repay amount) <= user debt
@@ -45,6 +58,11 @@ If this feature fails, how does the protocol lose money?
 # Table of Invariants + Failure Surface + Threat Model
 | State | Type | Invariant in plain English | Failure surface (what can go wrong, map of vulnerabilities derived from invariants) | 5-lens question | Threat Model / Attack | Enforced |  Severity/Impact |Test | Tested |
 
+\includepdf[pages={-}]{repay-invariants-with-failure-surface.pdf}
+\begin{landscape}
+\includegraphics[width=1.6\textwidth]{repay-invariants-with-failure-surface.pdf}
+\end{landscape}
+
 <!--> Comprose a table in google drive. Paste an image of a table here <!-->
 
 # Cross-Feature Invariant Consistency
@@ -53,6 +71,38 @@ If this feature fails, how does the protocol lose money?
 # Code Security Research
 ## Call Map - Structural Scan
 Accounting Boundaries/Irreversible/External func -> what happens
+
+repay()                             -> reduce what user owes, pay value either by burning aTokens or transfer underlying into the protocol
+    |-> BorrowLogic.executeRepay
+        |-> VIEW: reserve.cache                                                    -> in-memory snapshots addresses, indices and rates of a reserve
+        |-> IRREVERSIBLE/STORAGE: reserve.updateState()                            -> updates indices and timestamp
+        |-> VIEW: Helpers.getUserCurrentDebt                                       -> gets user's stableDebt and variableDebt
+        |-> ACCOUNTING BOUNDARIES/VIEW: ValidationLogic.validateRepay              -> validates repay
+        |
+        |-> determine 'paybackAmount'
+            |-> if InterestRateMode == STABLE -> paybackAmount = stableDebt
+            |-> else -> paybackAmount = variableDebt
+        |-> partial vs full repayment                                              -> reconsider 'paybackAmount' depending on effective repay amount transferred to protocol
+        |
+        |-> if InterestRateMode == STABLE                                         |-> debt tokens are burned before transfer and update of interest rates
+            |-> IRREVERSIBLE PIVOT/EXTERNAL: IStableDebtToken.burn()              |
+        |-> else                                                                  |
+            |-> IRREVERSIBLE PIVOT/EXTERNAL: IVariableDebtToken.burn()            |
+        |
+        |-> IRREVERSIBLE/STORAGE: reserve.updateInterestRates                      -> updates interest rates and utilization, affecting borrow and supply rates
+        |-> IRREVERSIBLE/STORAGE: userConfig.setBorrowing                          -> user's borrowing flag is zeroed if he repaid all debt
+        |-> IRREVERSIBLE/STORAGE: IsolationModeLogic.updateIsolatedDebtIfIsolated  -> adjust isolated debt if reserve is isolated
+        |
+        |-> if useATokens == true 
+            |-> IRREVERSIBLE/STORAGE: IAToken.burn()                               -> no approve/transfer of underlying token, burn aToken and reduce user's claim on reserve liquidity.
+        |-> else
+            |-> IRREVERSIBLE/EXTERNAL: IERC20.safeTransferFrom()                   -> transfer underlying into the protocol
+        |
+        |-> EMIT: Repay(asset, onBehalfOf, msg.sender, paybackAmount, useATokens)
+
+
+
+<!--Add a Repay State Machine Diagram->
 
 ## Call Map - Enforcement / Assumption Map
 func -> enforced: invariant

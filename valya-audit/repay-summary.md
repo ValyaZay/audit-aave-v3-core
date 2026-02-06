@@ -102,7 +102,70 @@ repay()                             -> reduce what user owes, pay value either b
 
 
 
-<!--Add a Repay State Machine Diagram->
+IStableDebtToken.burn()
+    |->_calculateBalanceIncrease() 
+        |-> VIEW: currentBalance = computed new principal which includes interest (it is realized, i.e. previous principal + interest) - not stored, it will be used totally or partially to burn repaid amount.
+        |-> VIEW: balanceIncrease = just interest accrued till now using a user stableRate
+    |-> cache a debtToken totalSupply
+    |-> cache a 'userStableRate'
+
+    |-> if (debtToken.totalSupply <= repaid amount)  -> reset storage - overflow/precision protection
+        |-> STORAGE: _totalSupply = 0
+        |-> STORAGE: _avgStableRate = 0
+    |-> else
+        |-> STORAGE: calculate _totalSupply = (current debtToken totalSupply - repaid amount)
+        |-> calculate 'total stable debt' (rate-weighted total stable debt)
+        |-> calculate 'individual repaid stable debt' (rate-weighted repaid portion)
+        |-> if 'individual repaid stable debt' >= 'total stable debt' -> reset storage - overflow/precision protection
+            |-> STORAGE: _totalSupply = 0
+            |-> STORAGE: _avgStableRate = 0
+        |-> else
+            |-> STORAGE: _avgStableRate = ('total stable debt' - 'individual repaid stable debt') / 'remained debt (i.e. total supply after repaid amount)'
+
+    |-> if user repays all his stableDebt (repaid amount == computed new principal)
+        |-> STORAGE: clear 'userStableRate'
+        |-> STORAGE: clear user timestamp
+    |-> else
+        |-> STORAGE: update user timestamp
+
+    |-> STORAGE: update total supply timestamp (always updated)
+
+    |-> if user repays less than cumulatedInterest on his principal (cumulatedInterest is not stored by this point because it will be mutated later)
+        |-> STORAGE: _mint()     -> realize interest - add unpaid part of interest (cumulatedInterest - repaid amount) to user's stableDebtToken balance (add to his principal, i.e. interest is capitalized)
+        |-> EMIT: Transfer(address(0), from, amountToMint)
+        |-> EMIT: Mint(...params)
+    |-> else
+        |-> repaid amount will cover all cumulatedInterest (cumulatedInterest is not written to storage yet) plus excessive amount = (repaid amount - cumulatedInterest)
+        |-> STORAGE: _burn()   -> burn excessive amount calculated on the previous stem - it is a part of a principal
+        |-> EMIT: Transfer(from, address(0), amountToBurn)
+        |-> EMIT: Burn(...params)
+
+
+
+IVariableDebtToken.burn()
+    |-> _burnScaled() - actual reduction of user's scaledBalance in userState happens here;
+            |-> compute repaid amount scaled down (to make it subtractable from scaledBalance) - based on current variable borrow index;
+            |-> VIEW: get user's scaledBalance;
+            |-> !!! part needed for emitting events only !!! 
+              |-> compute 'balanceIncrease' - it is an interest accrued since last index update in user's state;
+            |-> STORAGE: update index in user's state;
+            |-> STORAGE: _burn() -> old user's scaled balance is reduced by scaled repaid amount;
+            |-> !!! event's emitting part !!!
+                |-> if accrued interest 'balanceIncrease' > repaid amount (not scaled down)
+                    |-> EMIT: Transfer(address(0), user, amountToMint);
+                    |-> EMIT: Mint(user, user, amountToMint, balanceIncrease, index);
+                |-> else
+                    |-> EMIT: Transfer(user, address(0), amountToBurn);
+                    |-> EMIT: Burn(user, target, amountToBurn, balanceIncrease, index);
+    |-> returns scaledTotalSupply() - actual current variable debt token total supply after repaid amount subtraction in _burn() above
+
+
+
+
+
+
+
+
 
 ## Call Map - Enforcement / Assumption Map
 func -> enforced: invariant

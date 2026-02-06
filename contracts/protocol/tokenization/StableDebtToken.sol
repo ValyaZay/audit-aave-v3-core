@@ -181,49 +181,105 @@ contract StableDebtToken is DebtTokenBase, IncentivizedERC20, IStableDebtToken {
     address from,
     uint256 amount
   ) external virtual override onlyPool returns (uint256, uint256) {
+    /*
+    @V:E returns user principal + cumulatedInterest and just cumulatedInterest accrued till now using a stableRate for a user
+     */
     (, uint256 currentBalance, uint256 balanceIncrease) = _calculateBalanceIncrease(from);
 
+    /*
+      @V:E calculates a total stableDebtToken supply using an averageRate (average among all users?)
+     */
     uint256 previousSupply = totalSupply();
+
+    /*
+        @V:E just initialize 'nextAvgStableRate' and 'nextSupply' with zeros
+     */
     uint256 nextAvgStableRate = 0;
     uint256 nextSupply = 0;
+
+    /*
+        @V:E cache a 'userStableRate'
+     */
     uint256 userStableRate = _userState[from].additionalData;
 
     // Since the total supply and each single user debt accrue separately,
     // there might be accumulation errors so that the last borrower repaying
     // might actually try to repay more than the available debt supply.
     // In this case we simply set the total supply and the avg stable rate to 0
+
+    /*
+        @V:E if debtToken supply is less than repaid amount -> some accumulation error
+        'last borrower' above means 'we cannot safely compute a new avg rate' so the protocol defensively resets totalSupply and avgStableRate
+
+        Else - reduce debtToken total supply by repaid amount.
+    */
     if (previousSupply <= amount) {
       _avgStableRate = 0;
       _totalSupply = 0;
     } else {
+      /*
+          @V:E nextSupply = (current debtToken totalSupply - repaid amount)
+          it is a remained supply
+       */
       nextSupply = _totalSupply = previousSupply - amount;
+
+      /*
+          @V:E debtToken total supply + average interest accrued till now
+          it is like a 'common stable debt' (rate-weighted total stable debt)
+       */
       uint256 firstTerm = uint256(_avgStableRate).rayMul(previousSupply.wadToRay());
+
+      /*
+          @V:E repaid amount + user interest accrued till now
+          it is like an 'individual repaid stable debt' (rate-weighted repaid portion)
+       */
       uint256 secondTerm = userStableRate.rayMul(amount.wadToRay());
 
       // For the same reason described above, when the last user is repaying it might
       // happen that user rate * user balance > avg rate * total supply. In that case,
       // we simply set the avg rate to 0
+
+      /*
+          @V:E if-case is for the 'last borrower' - set _totalSupply and _avgStableRate to zero in case it wasn't set to zero before
+       */
       if (secondTerm >= firstTerm) {
         nextAvgStableRate = _totalSupply = _avgStableRate = 0;
       } else {
         nextAvgStableRate = _avgStableRate = (
+          /*
+              @V:E ((common debt - individual debt) / remained supply) = _avgStableRate
+           */
           (firstTerm - secondTerm).rayDiv(nextSupply.wadToRay())
         ).toUint128();
       }
     }
 
+    /*
+        @V:E if-case - user pays back all his stableDebt -> zero 'userStableRate' and timestamps
+    
+     */
     if (amount == currentBalance) {
+      //@V:E this is userStableRate
       _userState[from].additionalData = 0;
       _timestamps[from] = 0;
     } else {
+      /*
+          @V:E if not all stableDebt is repaid -> 'userStableRate' stays the same
+       */
       //solium-disable-next-line
       _timestamps[from] = uint40(block.timestamp);
     }
     //solium-disable-next-line
     _totalSupplyTimestamp = uint40(block.timestamp);
 
+    /*
+        @V:E if user repays less than cumulatedInterest of his principal
+     */
     if (balanceIncrease > amount) {
       uint256 amountToMint = balanceIncrease - amount;
+      /*
+          @V:E realize interest - add non-repaid part of (cumulatedInterest - repaid amount) to user's stableDebtToken balance
+       */
       _mint(from, amountToMint, previousSupply);
       emit Transfer(address(0), from, amountToMint);
       emit Mint(
@@ -238,6 +294,9 @@ contract StableDebtToken is DebtTokenBase, IncentivizedERC20, IStableDebtToken {
       );
     } else {
       uint256 amountToBurn = amount - balanceIncrease;
+      /*
+        @V:E burn excessive amount calculated on the previous stem - it is a part of a principal      
+       */
       _burn(from, amountToBurn, previousSupply);
       emit Transfer(from, address(0), amountToBurn);
       emit Burn(from, amountToBurn, currentBalance, balanceIncrease, nextAvgStableRate, nextSupply);

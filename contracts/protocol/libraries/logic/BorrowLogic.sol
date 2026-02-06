@@ -281,26 +281,8 @@ library BorrowLogic {
     */
     reserve.updateState(reserveCache);
 
-    /*@V:E view - get 'onBehalfOf' debts in a reserve - values here are all up-to-date, no futher index application needed for repay math
-      -> oldIndex * interestSinceLastUpdated == getNormalizedVariableDebt() (@V:E aave here calls index as 'debt', i.e. getNormalizedVariableDebt should be getNormalizedVariableIndex)
-      ---> oldIndex == reserve.variableBorrowIndex
-      ---> interestSinceLastUpdated  == calculateCompoundInterest(rate, deltaTime)
-      -> variableDebtToken.super.balanceOf(user) == scaledDebt
-      variableDebt = variableDebtToken.super.balanceOf(user) * (oldIndex * interestSinceLastUpdated)
-
-      -> stableDebt calculation does not use stored 'oldIndex', it's index is always re-calculated based on per-user rate when current stableDebt is needed. This is possible because principal is stored for stableDebt is raw, not scaled (see below that it is scaled rarely)
-      -> index = calculateCompoundedInterest(userRate, deltaTime)
-      stableDebt = stableDebtToken.super.balanceOf(user) * index(per-user rate, deltaTime)
-
-      To sum up: stableDebt calculation does not use stored 'oldIndex', it's index (=growth factor) is always re-calculated when current stableDebt is needed (i.e. recomputed on demand from (userRate and now-lastUpdated)). This is possible because principal is stored for stableDebt as raw, not scaled by any index. There is no need to store scaled principal for stableDebt because the rate is individual for a user. But!! Stable rate may be rebalanced, i.e. changed. In this case stable principal will change, it will contain accrued interest now for the old per-user rate and new per-user rate will be applied to the new principal for future time. This rebalancing happens rare, comparing to variable rate.
-      
-      But to culculate variableDebt we use stored scaled principal, which includes applied indices before the current time. It is necessary because variable index CHANGES OVER TIME frequently and should be applied on demand or once it is changed because there is no storage for variable rate in particular time range. 
-
-      Both models of stable debt and variable debt are the same at the moment of global rate or per-user rate change. In this moment 'scaledBalance' (==scaledDebt) for variableDebt contains interest prior rate change. Same is for stableDebt -> the user principal updates to include the previous interest calculated for the old per-user rate. Scaled balance stays constant between updates, just like principal for stable debt.
-
-      Key takeaways: Operational difference:
-        Variable → global rate applied via global index
-        Stable → per-user rate applied on demand
+    /*
+    @V:E see in-depth explanation in notebook
     */
     (uint256 stableDebt, uint256 variableDebt) = Helpers.getUserCurrentDebt(
       params.onBehalfOf,

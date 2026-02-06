@@ -97,22 +97,57 @@ abstract contract ScaledBalanceTokenBase is MintableIncentivizedERC20, IScaledBa
    * @param index The variable debt index of the reserve
    */
   function _burnScaled(address user, address target, uint256 amount, uint256 index) internal {
+    /*
+      @V:E compute repaid amount scaled down (to make it subtractable from scaledBalance)
+            e.g. index = 1.2, repaid amount = 1000, then amount scaled = 1000/1.2=833.33
+
+            index is a current variable debt index of the reserve
+     */
     uint256 amountScaled = amount.rayDiv(index);
     require(amountScaled != 0, Errors.INVALID_BURN_AMOUNT);
 
+    /*
+    @V:E VIEW: already scaled down debt, stored when borrowed    
+     */
     uint256 scaledBalance = super.balanceOf(user);
+
+    /*
+      @V:E
+       this is an interest accrued since last index update - computed, will not be stored
+       currentDebt (computed using current index stored in reserve state) - previousDebt(based on previous index stored in userState) = interest accrued since last index update
+    
+     */
     uint256 balanceIncrease = scaledBalance.rayMul(index) -
       scaledBalance.rayMul(_userState[user].additionalData);
 
+    /*
+      @V:E STORAGE: store current index in userState
+     */
     _userState[user].additionalData = index.toUint128();
 
+    /*
+      @V:E burn exactly repaid amount scaled down 
+           STORAGE: old user's scaled balance is reduced by scaled repaid amount
+     */
     _burn(user, amountScaled.toUint128());
 
+
+    /*
+        @V:E balanceIncrease is accrued interest;
+             repaid amount covered a part of interest;
+             This code section does not mutate storage - here events are emitted only
+     */
     if (balanceIncrease > amount) {
+      /*
+          @V:E no exact mint happens, just emit events with how much user's accrued interest now, when repaid amount is subtracted
+       */
       uint256 amountToMint = balanceIncrease - amount;
       emit Transfer(address(0), user, amountToMint);
       emit Mint(user, user, amountToMint, balanceIncrease, index);
     } else {
+      /*
+          @V:E no exact burn happens, just emit events with how much amount should be subtracted from scaledBalance(?)
+       */
       uint256 amountToBurn = amount - balanceIncrease;
       emit Transfer(user, address(0), amountToBurn);
       emit Burn(user, target, amountToBurn, balanceIncrease, index);

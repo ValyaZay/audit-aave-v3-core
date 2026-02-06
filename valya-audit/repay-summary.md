@@ -160,16 +160,27 @@ IVariableDebtToken.burn()
     |-> returns scaledTotalSupply() - actual current variable debt token total supply after repaid amount subtraction in _burn() above
 
 
-
-
-
-
-
-
-
 ## Call Map - Enforcement / Assumption Map
 func -> enforced: invariant
         assumed: invariant
+
+
+executeRepay()
+    |-> reserve.updateState() 
+        |-> _updateIndexes() -  ENFORCED: #11 - indices may update, but must remain monotonic and consistent with accrued interest - reserve indices are monotonic non-decreasing and independent of individual user repay actions;
+                                PARTIALLY ENFORCED: #15 - a user's debt exposure is fully eliminated when scaled debt becomes zero, without mutating reserve indices;
+
+    |-> ValidationLogic.validateRepay() -   ENFORCED: #2 - reserve should not be pauzed or frozen
+                                            ENFORCED: #3 - repay() must revert if effective user debt is zero
+    
+    |-> IStableDebtToken.burn() - PARTIALLY ENFORCED: #16 - user state is updated correctly on full repay - clear userStableRate and user timestamp
+        |-> _burn() - PARTIALLY ENFORCED: #16 - user state is updated correctly on full repay - user principal is updated
+
+    |-> IVariableDebtToken.burn()
+        |-> _burnScaled() - PARTIALLY ENFORCED: #15 - a user's debt exposure is fully eliminated when scaled debt becomes zero, without mutating reserve indices;
+                             PARTIALLY ENFORCED: #16 - userState index updated
+        |->_burn() - PARTIALLY ENFORCED: #16 - userState scaledBalance updated
+
 
 
 

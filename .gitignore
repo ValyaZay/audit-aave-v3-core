@@ -11,6 +11,8 @@ build/
 /types
 contracts/hardhat-dependency-compiler
 
+out*
+
 deployed-contracts.json
 
 coverage

@@ -165,21 +165,27 @@ func -> enforced: invariant
         assumed: invariant
 
 
-executeRepay()
+executeRepay()                              ENFORCED: #7 - burned debt tokens amount should be <= transferred repay amount to the protocol
     |-> reserve.updateState() 
-        |-> _updateIndexes() -  ENFORCED: #11 - indices may update, but must remain monotonic and consistent with accrued interest - reserve indices are monotonic non-decreasing and independent of individual user repay actions;
-                                PARTIALLY ENFORCED: #15 - a user's debt exposure is fully eliminated when scaled debt becomes zero, without mutating reserve indices;
+        |-> _updateIndexes() -              ENFORCED: #8 - indices may update, but must remain monotonic and consistent with accrued interest - reserve indices are monotonic non-decreasing and independent of individual user repay actions;
+                                            PARTIALLY ENFORCED: #12 - a user's debt exposure is fully eliminated when scaled debt becomes zero, without mutating reserve indices - ensures indices remain consistent;
 
     |-> ValidationLogic.validateRepay() -   ENFORCED: #2 - reserve should not be pauzed or frozen
                                             ENFORCED: #3 - repay() must revert if effective user debt is zero
     
-    |-> IStableDebtToken.burn() - PARTIALLY ENFORCED: #16 - user state is updated correctly on full repay - clear userStableRate and user timestamp
-        |-> _burn() - PARTIALLY ENFORCED: #16 - user state is updated correctly on full repay - user principal is updated
+    |-> IStableDebtToken.burn() -           PARTIALLY ENFORCED: #13 - user state is updated correctly on full repay - clear userStableRate and user timestamp
+        |-> _burn() -                       ENFORCED: #5 - effective debt reduction <= user debt
+                                            ENFORCED: #6 - burned debt tokens amount should be <= user debt 
+                                            PARTIALLY ENFORCED: #13 - user state is updated correctly on full repay - user principal is updated
 
     |-> IVariableDebtToken.burn()
-        |-> _burnScaled() - PARTIALLY ENFORCED: #15 - a user's debt exposure is fully eliminated when scaled debt becomes zero, without mutating reserve indices;
-                             PARTIALLY ENFORCED: #16 - userState index updated
-        |->_burn() - PARTIALLY ENFORCED: #16 - userState scaledBalance updated
+        |-> _burnScaled() -                 ENFORCED: #9 - protocol must not create unrepayable or irreducible debt dust
+                                            PARTIALLY ENFORCED: #12 - a user's debt exposure is fully eliminated when scaled debt becomes zero, without mutating reserve indices - here dust/rounding is handled;
+                                            PARTIALLY ENFORCED: #13 - user state is updated correctly on full repay - userState index updated
+
+        |->_burn() -                        ENFORCED: #5 - effective debt reduction <= user debt
+                                            ENFORCED: #6 - burned debt tokens amount should be <= user debt 
+                                            PARTIALLY ENFORCED: #13 - user state is updated correctly on full repay - userState scaledBalance updated
 
 
 
